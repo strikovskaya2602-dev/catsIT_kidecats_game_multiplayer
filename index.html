@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>catsIT Online | P2P Arena</title>
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <style>
+        :root { --orange: #ff5500; --blue: #00f2ff; }
+        body { margin: 0; background: #080808; color: white; font-family: 'Segoe UI', sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; }
+        
+        .menu { background: #111; padding: 20px; border-radius: 12px; border: 1px solid #222; margin-bottom: 20px; text-align: center; width: 400px; }
+        input { background: #000; border: 1px solid #333; color: #fff; padding: 10px; border-radius: 5px; width: 80%; margin: 10px 0; outline: none; }
+        input:focus { border-color: var(--orange); }
+        .btn { background: var(--orange); color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; font-weight: bold; width: 85%; }
+
+        canvas { background: radial-gradient(circle, #1a1a1d 0%, #050505 100%); border: 5px solid #222; border-radius: 10px; display: none; cursor: none; }
+        .info { margin-top: 10px; font-size: 12px; color: #555; }
+        #status { color: var(--orange); font-weight: bold; margin-bottom: 5px; }
+    </style>
+</head>
+<body>
+
+    <div class="menu" id="main-menu">
+        <h2 style="color: var(--orange); margin: 0 0 15px 0;">catsIT ONLINE</h2>
+        <div id="status">Инициализация PeerJS...</div>
+        
+        <div style="margin-bottom: 15px;">
+            <small>Твой ID (скинь другу):</small><br>
+            <b id="my-id" style="color: var(--blue); cursor: pointer;" onclick="copyId()">---</b>
+        </div>
+
+        <input type="text" id="conn-id" placeholder="Введите ID друга">
+        <button class="btn" onclick="connectToFriend()">ПОДКЛЮЧИТЬСЯ</button>
+        <div class="info">Тот, кто создает ID — играет слева. Тот, кто подключается — справа.</div>
+    </div>
+
+    <div id="game-ui" style="display: none; text-align: center;">
+        <div style="font-size: 24px; margin-bottom: 10px;">
+            <span id="score">0 : 0</span>
+        </div>
+        <canvas id="arena" width="800" height="500"></canvas>
+    </div>
+
+<script>
+    const canvas = document.getElementById('arena');
+    const ctx = canvas.getContext('2d');
+    const status = document.getElementById('status');
+    const myIdDisp = document.getElementById('my-id');
+
+    let peer = new Peer();
+    let conn;
+    let isHost = false;
+
+    // Данные игры
+    const puck = { x: 400, y: 250, dx: 0, dy: 0, r: 12 };
+    const p1 = { x: 100, y: 250, r: 30, color: '#00f2ff' }; // Хост
+    const p2 = { x: 700, y: 250, r: 30, color: '#ff5500' }; // Гость
+
+    // 1. Инициализация PeerJS
+    peer.on('open', (id) => {
+        myIdDisp.innerText = id;
+        status.innerText = "ГОТОВ К ПОДКЛЮЧЕНИЮ";
+    });
+
+    // 2. Ожидание подключения (Если ты хост)
+    peer.on('connection', (c) => {
+        conn = c;
+        isHost = true;
+        setupConnection();
+        startGameUI();
+    });
+
+    // 3. Подключение к другу (Если ты гость)
+    function connectToFriend() {
+        const id = document.getElementById('conn-id').value;
+        if (!id) return alert("Введите ID!");
+        conn = peer.connect(id);
+        isHost = false;
+        setupConnection();
+        startGameUI();
+    }
+
+    function setupConnection() {
+        conn.on('open', () => {
+            status.innerText = "СОЕДИНЕНО!";
+            setInterval(sendData, 16); // Отправка данных 60 раз в сек
+        });
+
+        conn.on('data', (data) => {
+            if (isHost) {
+                // Хост получает только координаты игрока 2
+                p2.x = data.x; p2.y = data.y;
+            } else {
+                // Гость получает всё: и врага, и шайбу
+                p1.x = data.p1.x; p1.y = data.p1.y;
+                puck.x = data.puck.x; puck.y = data.puck.y;
+            }
+        });
+    }
+
+    function sendData() {
+        if (!conn || !conn.open) return;
+        if (isHost) {
+            // Хост отправляет всё состояние игры
+            conn.send({ p1: {x: p1.x, y: p1.y}, puck: {x: puck.x, y: puck.y} });
+        } else {
+            // Гость отправляет только свою позицию
+            conn.send({ x: p2.x, y: p2.y });
+        }
+    }
+
+    // Управление
+    canvas.addEventListener('mousemove', (e) => {
+        const rect = canvas.getBoundingClientRect();
+        let mx = e.clientX - rect.left;
+        let my = e.clientY - rect.top;
+
+        if (isHost) {
+            if (mx > 380) mx = 380; // Ограничение хоста
+            p1.x = mx; p1.y = my;
+        } else {
+            if (mx < 420) mx = 420; // Ограничение гостя
+            p2.x = mx; p2.y = my;
+        }
+    });
+
+    function startGameUI() {
+        document.getElementById('main-menu').style.display = 'none';
+        document.getElementById('game-ui').style.display = 'block';
+        canvas.style.display = 'block';
+        if (isHost) {
+            puck.dx = 4; puck.dy = 2; // Хост запускает шайбу
+            gameLoop();
+        } else {
+            gameLoop(); // Гость просто рендерит
+        }
+    }
+
+    function gameLoop() {
+        if (isHost) {
+            // Только хост считает физику, чтобы не было рассинхрона
+            puck.x += puck.dx; puck.y += puck.dy;
+            if (puck.y < puck.r || puck.y > canvas.height - puck.r) puck.dy *= -1;
+            if (puck.x < 0 || puck.x > canvas.width) puck.dx *= -1;
+            
+            checkCollision(p1, puck);
+            checkCollision(p2, puck);
+        }
+        
+        draw();
+        requestAnimationFrame(gameLoop);
+    }
+
+    function checkCollision(obj, pk) {
+        let dx = pk.x - obj.x;
+        let dy = pk.y - obj.y;
+        let dist = Math.sqrt(dx*dx + dy*dy);
+        if (dist < obj.r + pk.r) {
+            let angle = Math.atan2(dy, dx);
+            pk.dx = Math.cos(angle) * 7;
+            pk.dy = Math.sin(angle) * 7;
+        }
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        // Линия центра
+        ctx.strokeStyle = "#222"; ctx.beginPath(); ctx.moveTo(400,0); ctx.lineTo(400,500); ctx.stroke();
+        // Шайба
+        ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(puck.x, puck.y, puck.r, 0, Math.PI*2); ctx.fill();
+        // Игроки
+        ctx.fillStyle = p1.color; ctx.beginPath(); ctx.arc(p1.x, p1.y, p1.r, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = p2.color; ctx.beginPath(); ctx.arc(p2.x, p2.y, p2.r, 0, Math.PI*2); ctx.fill();
+    }
+
+    function copyId() {
+        navigator.clipboard.writeText(myIdDisp.innerText);
+        alert("ID скопирован!");
+    }
+</script>
+</body>
+</html>
